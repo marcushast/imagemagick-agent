@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"from imagemagick_agent.executor import CommandExecutor; exec = CommandExecutor(); print(f''Detected command: {exec.imagemagick_command}'')\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
