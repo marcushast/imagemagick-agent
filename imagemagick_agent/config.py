@@ -1,6 +1,7 @@
 """Configuration management for ImageMagick Agent."""
 
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 from pydantic import Field
@@ -48,6 +49,40 @@ class Settings(BaseSettings):
     max_history: int = Field(
         default=10,
         description="Maximum number of conversation turns to keep in history",
+    )
+
+    # Logging Configuration
+    enable_logging: bool = Field(
+        default=True,
+        description="Enable structured logging",
+    )
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR)",
+    )
+    log_dir: Path = Field(
+        default=Path("logs"),
+        description="Directory for log files",
+    )
+    enable_llm_logging: bool = Field(
+        default=True,
+        description="Enable detailed LLM call logging",
+    )
+    enable_execution_logging: bool = Field(
+        default=True,
+        description="Enable command execution audit logging",
+    )
+    log_retention_days: int = Field(
+        default=7,
+        description="Number of days to retain logs",
+    )
+    log_max_bytes: int = Field(
+        default=10_000_000,
+        description="Maximum size of each log file before rotation (bytes)",
+    )
+    log_backup_count: int = Field(
+        default=5,
+        description="Number of backup log files to keep",
     )
 
     def validate_api_keys(self) -> None:

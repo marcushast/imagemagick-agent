@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "gradio>=4.0.0",
+    "flask>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +26,7 @@ dev = [
 [project.scripts]
 imagemagick-agent = "imagemagick_agent.cli:main"
 imagemagick-agent-web = "imagemagick_agent.gradio_app:launch"
+imagemagick-agent-logs = "imagemagick_agent.log_viewer_cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -11,6 +11,7 @@ from rich.table import Table
 
 from .config import load_settings
 from .agent import ImageMagickAgent
+from .logging_config import setup_logging
 
 
 console = Console()
@@ -134,6 +135,20 @@ def main():
     except Exception as e:
         console.print(f"[red]Error loading settings:[/red] {e}")
         sys.exit(1)
+
+    # Setup logging
+    if settings.enable_logging:
+        try:
+            setup_logging(
+                log_dir=settings.log_dir,
+                app_log_level=settings.log_level,
+                enable_llm_logging=settings.enable_llm_logging,
+                enable_execution_logging=settings.enable_execution_logging,
+                max_bytes=settings.log_max_bytes,
+                backup_count=settings.log_backup_count,
+            )
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not initialize logging:[/yellow] {e}")
 
     # Initialize agent
     try:

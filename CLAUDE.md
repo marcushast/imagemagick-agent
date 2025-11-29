@@ -29,6 +29,8 @@ cp .env.example .env          # Set up environment
 ### Running the Agent
 ```bash
 imagemagick-agent             # Start interactive CLI
+imagemagick-agent-web         # Start Gradio web interface
+imagemagick-agent-logs        # Start log viewer web server (port 5000)
 ```
 
 ### Testing
@@ -79,6 +81,23 @@ ruff check imagemagick_agent/ # Lint code
 - Interactive REPL with special commands (`info`, `reset`, `help`)
 - Command confirmation flow (unless auto-execute enabled)
 
+**6. Logging Framework (`imagemagick_agent/logging_config.py`, `llm_logger.py`)**
+- Structured logging in JSON Lines (.jsonl) format
+- **LLM Call Logger**: Tracks all LLM requests/responses with full context
+  - Request: provider, model, user input, conversation history, system prompt
+  - Response: generated command, response time, token usage, errors
+- **Execution Logger**: Audit trail for all ImageMagick command executions
+  - Validation: command checks (whitelist, dangerous options, shell injection)
+  - Execution: command, success/failure, timing, output files, stdout/stderr
+- **Application Logger**: General application events and errors
+- **Log Rotation**: Configurable file size limits and backup counts
+- **Web Viewer** (`web_logs.py`): Flask-based dashboard for log analysis
+  - Real-time log streaming with Server-Sent Events
+  - Filtering by provider, time range, success/failure
+  - Full-text search across all logs
+  - Statistics dashboard (avg response time, token usage, success rates)
+  - Expandable log entries with full request/response details
+
 ### Data Flow
 
 ```
@@ -119,6 +138,32 @@ Environment variables (`.env` file):
 - `GOOGLE_API_KEY`: Required for Google provider
 - `AUTO_EXECUTE`: `true` to skip confirmation, `false` for manual approval
 - `MAX_HISTORY`: Maximum conversation turns to keep (default: 10)
+
+### Logging Configuration
+
+- `ENABLE_LOGGING`: `true` to enable structured logging (default: `true`)
+- `LOG_LEVEL`: Logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`)
+- `LOG_DIR`: Directory for log files (default: `logs`)
+- `ENABLE_LLM_LOGGING`: `true` to enable detailed LLM call tracking (default: `true`)
+- `ENABLE_EXECUTION_LOGGING`: `true` to enable command execution audit trail (default: `true`)
+- `LOG_MAX_BYTES`: Maximum size of each log file before rotation (default: 10000000 / 10MB)
+- `LOG_BACKUP_COUNT`: Number of backup log files to keep (default: 5)
+
+**Log Files:**
+- `logs/app.log` - General application logs (startup, errors, warnings)
+- `logs/llm_calls.jsonl` - Structured LLM request/response logs (JSON Lines)
+- `logs/executions.jsonl` - Command execution audit trail (JSON Lines)
+
+**Viewing Logs:**
+```bash
+# Start web-based log viewer
+imagemagick-agent-logs
+
+# With custom port and log directory
+imagemagick-agent-logs --port 8080 --log-dir /path/to/logs
+
+# Open browser to http://localhost:5000
+```
 
 ## Testing Images
 

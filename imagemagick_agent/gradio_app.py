@@ -9,6 +9,7 @@ from typing import List, Tuple, Optional
 from .config import load_settings
 from .agent import ImageMagickAgent
 from .storage import FileStorage
+from .logging_config import setup_logging
 
 
 class GradioInterface:
@@ -299,6 +300,24 @@ def launch(share: bool = False, server_port: int = 7860):
         share: Whether to create a public sharing link
         server_port: Port to run the server on
     """
+    # Load settings
+    settings = load_settings()
+
+    # Setup logging if enabled
+    if settings.enable_logging:
+        try:
+            setup_logging(
+                log_dir=settings.log_dir,
+                app_log_level=settings.log_level,
+                enable_llm_logging=settings.enable_llm_logging,
+                enable_execution_logging=settings.enable_execution_logging,
+                max_bytes=settings.log_max_bytes,
+                backup_count=settings.log_backup_count,
+            )
+            print(f"✓ Logging enabled - logs directory: {settings.log_dir.absolute()}")
+        except Exception as e:
+            print(f"Warning: Could not initialize logging: {e}")
+
     # Set up signal handlers for graceful shutdown
     def signal_handler(sig, frame):
         print("\n\nShutting down server...")
