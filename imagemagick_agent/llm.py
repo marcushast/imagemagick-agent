@@ -48,12 +48,13 @@ class LLMClient(ABC):
     """Abstract base class for LLM clients."""
 
     @abstractmethod
-    def generate_command(self, user_message: str, history: List[Dict[str, str]]) -> str:
+    def generate_command(self, user_message: str, history: List[Dict[str, str]], session_id: Optional[str] = None) -> str:
         """Generate an ImageMagick command based on user input.
 
         Args:
             user_message: The user's request
             history: List of previous messages in the conversation
+            session_id: Optional session ID for tracking
 
         Returns:
             Generated ImageMagick command as a string
@@ -77,7 +78,7 @@ class AnthropicClient(LLMClient):
         self.llm_logger = llm_logger
         self.logger = logging.getLogger("imagemagick_agent.llm")
 
-    def generate_command(self, user_message: str, history: List[Dict[str, str]]) -> str:
+    def generate_command(self, user_message: str, history: List[Dict[str, str]], session_id: Optional[str] = None) -> str:
         """Generate command using Claude."""
         messages = history + [{"role": "user", "content": user_message}]
 
@@ -90,6 +91,7 @@ class AnthropicClient(LLMClient):
                 user_input=user_message,
                 conversation_history=history,
                 system_prompt=self.system_prompt,
+                session_id=session_id,
             )
 
         start_time = time.time()
@@ -116,6 +118,7 @@ class AnthropicClient(LLMClient):
                         "input_tokens": response.usage.input_tokens,
                         "output_tokens": response.usage.output_tokens,
                     },
+                    session_id=session_id,
                 )
 
             self.logger.debug(
@@ -137,6 +140,7 @@ class AnthropicClient(LLMClient):
                     generated_command="",
                     response_time_ms=response_time_ms,
                     error=error_msg,
+                    session_id=session_id,
                 )
 
             raise
@@ -158,7 +162,7 @@ class OpenAIClient(LLMClient):
         self.llm_logger = llm_logger
         self.logger = logging.getLogger("imagemagick_agent.llm")
 
-    def generate_command(self, user_message: str, history: List[Dict[str, str]]) -> str:
+    def generate_command(self, user_message: str, history: List[Dict[str, str]], session_id: Optional[str] = None) -> str:
         """Generate command using OpenAI."""
         messages = [{"role": "system", "content": self.system_prompt}] + history
         messages.append({"role": "user", "content": user_message})
@@ -172,6 +176,7 @@ class OpenAIClient(LLMClient):
                 user_input=user_message,
                 conversation_history=history,
                 system_prompt=self.system_prompt,
+                session_id=session_id,
             )
 
         start_time = time.time()
@@ -200,6 +205,7 @@ class OpenAIClient(LLMClient):
                     generated_command=command,
                     response_time_ms=response_time_ms,
                     token_usage=token_usage,
+                    session_id=session_id,
                 )
 
             self.logger.debug(
@@ -221,6 +227,7 @@ class OpenAIClient(LLMClient):
                     generated_command="",
                     response_time_ms=response_time_ms,
                     error=error_msg,
+                    session_id=session_id,
                 )
 
             raise
@@ -246,7 +253,7 @@ class GoogleClient(LLMClient):
         self.llm_logger = llm_logger
         self.logger = logging.getLogger("imagemagick_agent.llm")
 
-    def generate_command(self, user_message: str, history: List[Dict[str, str]]) -> str:
+    def generate_command(self, user_message: str, history: List[Dict[str, str]], session_id: Optional[str] = None) -> str:
         """Generate command using Google Gemini."""
         # Convert history to Gemini format
         gemini_history = []
@@ -263,6 +270,7 @@ class GoogleClient(LLMClient):
                 user_input=user_message,
                 conversation_history=history,
                 system_prompt=self.system_prompt,
+                session_id=session_id,
             )
 
         start_time = time.time()
@@ -291,6 +299,7 @@ class GoogleClient(LLMClient):
                     generated_command=command,
                     response_time_ms=response_time_ms,
                     token_usage=token_usage,
+                    session_id=session_id,
                 )
 
             self.logger.debug(
@@ -312,6 +321,7 @@ class GoogleClient(LLMClient):
                     generated_command="",
                     response_time_ms=response_time_ms,
                     error=error_msg,
+                    session_id=session_id,
                 )
 
             raise

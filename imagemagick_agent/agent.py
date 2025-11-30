@@ -1,6 +1,7 @@
 """Main agent orchestration."""
 
 import logging
+import uuid
 from typing import Dict, List, Optional
 from pathlib import Path
 
@@ -22,6 +23,9 @@ class ImageMagickAgent:
         self.settings = settings
         self.logger = logging.getLogger("imagemagick_agent.agent")
 
+        # Generate initial session ID
+        self.session_id = str(uuid.uuid4())
+
         # Initialize loggers if logging is enabled
         self.llm_logger = None
         self.execution_logger = None
@@ -33,7 +37,10 @@ class ImageMagickAgent:
                 self.execution_logger = ExecutionLogger(enabled=True)
 
         # Initialize executor and LLM client
-        self.executor = CommandExecutor(execution_logger=self.execution_logger)
+        self.executor = CommandExecutor(
+            execution_logger=self.execution_logger,
+            session_id=self.session_id
+        )
         self.llm_client = create_llm_client(
             settings, self.executor.imagemagick_command, self.llm_logger
         )
@@ -41,7 +48,7 @@ class ImageMagickAgent:
 
         self.logger.info(
             f"ImageMagick Agent initialized with {settings.llm_provider.value} "
-            f"provider, model={settings.llm_model}"
+            f"provider, model={settings.llm_model}, session={self.session_id}"
         )
 
     def _add_to_history(self, role: str, content: str) -> None:
@@ -74,7 +81,7 @@ class ImageMagickAgent:
 
         # Generate command using LLM
         try:
-            command = self.llm_client.generate_command(user_input, self.conversation_history)
+            command = self.llm_client.generate_command(user_input, self.conversation_history, session_id=self.session_id)
         except Exception as e:
             self.logger.error(f"LLM generation failed: {str(e)}")
             return {
@@ -168,7 +175,19 @@ class ImageMagickAgent:
         """
         return self.executor.get_image_info(file_path)
 
+    def start_new_session(self) -> str:
+        """Start a new session with a fresh ID.
+
+        Returns:
+            The new session ID
+        """
+        self.session_id = str(uuid.uuid4())
+        self.executor.set_session_id(self.session_id)
+        self.logger.info(f"Started new session: {self.session_id}")
+        return self.session_id
+
     def reset_conversation(self) -> None:
-        """Reset the conversation history."""
+        """Reset the conversation history and start a new session."""
         self.logger.info("Resetting conversation history")
         self.conversation_history = []
+        self.start_new_session()

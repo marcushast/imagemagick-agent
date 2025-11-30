@@ -13,6 +13,7 @@ from .agent import ImageMagickAgent
 from .storage import FileStorage
 from .logging_config import setup_logging
 from .log_reader import LogReader
+from .llm_logger import ExecutionLogger
 
 
 class GradioInterface:
@@ -24,7 +25,11 @@ class GradioInterface:
         self.agent = ImageMagickAgent(self.settings)
         self.storage = FileStorage()
         self.log_reader = LogReader(log_dir=self.settings.log_dir)
+        self.execution_logger = ExecutionLogger(enabled=self.settings.enable_execution_logging)
         self.last_command: Optional[str] = None
+        # Track commands by message index for feedback logging
+        self.command_map = {}  # {message_index: {"command": str, "output_file": str}}
+        self.last_command_index: Optional[int] = None
 
     def process_message(
         self,
@@ -45,12 +50,14 @@ class GradioInterface:
         if not message.strip():
             return chat_history
 
-        # Handle file upload
+        # Handle file upload - start a new session
         if uploaded_image:
             try:
                 saved_path = self.storage.save_uploaded_file(
                     uploaded_image, original_name=Path(uploaded_image).name
                 )
+                # Start a new session when a new image is uploaded
+                self.agent.start_new_session()
                 upload_msg = f"(Image uploaded: {saved_path.name})"
                 message = f"{message} {upload_msg}"
             except Exception as e:
@@ -106,6 +113,15 @@ class GradioInterface:
             command_text = f"**Generated Command:**\n```bash\n{working_command}\n```\n\n{response_text}"
             chat_history.append({"role": "assistant", "content": command_text})
 
+            # Track this command for feedback (message index is current length - 1)
+            message_index = len(chat_history) - 1
+            self.command_map[message_index] = {
+                "command": working_command,
+                "output_file": str(execution_result.output_file) if execution_result.output_file else None,
+                "session_id": self.agent.session_id,
+            }
+            self.last_command_index = message_index
+
             # If successful and there's an output file, show it inline as a separate message
             if execution_result.success and execution_result.output_file:
                 self.storage.add_output_file(execution_result.output_file)
@@ -154,7 +170,49 @@ class GradioInterface:
         self.agent.reset_conversation()
         self.storage.reset()
         self.last_command = None
+        self.command_map.clear()
         return []
+
+    def handle_feedback(self, feedback_type: str, chat_history: List[dict]) -> List[dict]:
+        """Handle user feedback (thumbs up/down) on the last command.
+
+        Args:
+            feedback_type: "liked" or "disliked"
+            chat_history: Current chat history
+
+        Returns:
+            Updated chat history with feedback confirmation
+        """
+        if self.last_command_index is None:
+            chat_history.append({
+                "role": "assistant",
+                "content": "⚠️ No command to rate yet!"
+            })
+            return chat_history
+
+        # Look up the command associated with the last message
+        if self.last_command_index in self.command_map:
+            cmd_info = self.command_map[self.last_command_index]
+            self.execution_logger.log_feedback(
+                command=cmd_info["command"],
+                feedback=feedback_type,
+                message_index=self.last_command_index,
+                output_file=cmd_info["output_file"],
+                session_id=cmd_info["session_id"],
+            )
+            emoji = "👍" if feedback_type == "liked" else "👎"
+            feedback_msg = f"{emoji} Feedback recorded! You rated this command as {feedback_type}."
+            chat_history.append({
+                "role": "assistant",
+                "content": feedback_msg
+            })
+        else:
+            chat_history.append({
+                "role": "assistant",
+                "content": "⚠️ Could not find command to rate."
+            })
+
+        return chat_history
 
     def load_log_stats(self):
         """Load and format log statistics for display."""
@@ -175,13 +233,39 @@ class GradioInterface:
 - **Successful:** {stats['executions']['successful']} ✅
 - **Failed:** {stats['executions']['failed']} ❌
 - **Avg Execution Time:** {stats['executions']['avg_execution_time_ms']:.0f} ms
+
+### User Feedback
+- **Total:** {stats['feedback']['total']}
+- **Liked:** {stats['feedback']['liked']} 👍
+- **Disliked:** {stats['feedback']['disliked']} 👎
 """
         return stats_md
 
-    def load_llm_logs(self, limit: int = 50, provider: str = "All"):
+    def load_sessions(self):
+        """Load available sessions for the dropdown."""
+        sessions = self.log_reader.get_sessions()
+        if not sessions:
+            return gr.Dropdown(choices=["All"])
+
+        # Format session choices: "All" plus session IDs with metadata
+        # Use tuples of (label, value) for display
+        choices = [("All Sessions", "All")]
+        for session in sessions:
+            session_id_short = session["session_id"][:8]  # Show first 8 chars of UUID
+            count = session["command_count"]
+            start_time = session.get("start_time", "")[:19]  # YYYY-MM-DD HH:MM:SS
+            label = f"{session_id_short}... ({count} cmds, {start_time})"
+            choices.append((label, session["session_id"]))  # (display, value)
+
+        return gr.Dropdown(choices=choices)
+
+    def load_llm_logs(self, limit: int = 50, provider: str = "All", session: str = "All"):
         """Load and format LLM logs for display."""
         provider_filter = None if provider == "All" else provider.lower()
-        logs = self.log_reader.get_llm_calls(limit=limit, provider=provider_filter)
+        session_filter = None if session == "All" else session
+        logs = self.log_reader.get_llm_calls(
+            limit=limit, provider=provider_filter, session_id=session_filter
+        )
 
         if not logs:
             return [], ["No logs available"]
@@ -189,14 +273,26 @@ class GradioInterface:
         table_data, headers = self.log_reader.format_llm_calls_for_display(logs)
         return table_data, headers
 
-    def load_execution_logs(self, limit: int = 50):
+    def load_execution_logs(self, limit: int = 50, session: str = "All"):
         """Load and format execution logs for display."""
-        logs = self.log_reader.get_executions(limit=limit)
+        session_filter = None if session == "All" else session
+        logs = self.log_reader.get_executions(limit=limit, session_id=session_filter)
 
         if not logs:
             return [], ["No logs available"]
 
         table_data, headers = self.log_reader.format_executions_for_display(logs)
+        return table_data, headers
+
+    def load_unified_logs(self, limit: int = 100, session: str = "All"):
+        """Load and format unified logs (LLM calls + executions) for display."""
+        session_filter = None if session == "All" else session
+        logs = self.log_reader.get_unified_logs(limit=limit, session_id=session_filter)
+
+        if not logs:
+            return [], ["No logs available"]
+
+        table_data, headers = self.log_reader.format_unified_logs_for_display(logs)
         return table_data, headers
 
     def build_interface(self) -> gr.Blocks:
@@ -238,6 +334,12 @@ class GradioInterface:
                         height=500,
                     )
 
+                    # Feedback buttons
+                    with gr.Row():
+                        gr.Markdown("**Rate the last command:**")
+                        thumbs_up_btn = gr.Button("👍 Good", size="sm")
+                        thumbs_down_btn = gr.Button("👎 Bad", size="sm")
+
                     # Message input
                     msg_input = gr.Textbox(
                         label="Your request",
@@ -278,9 +380,103 @@ class GradioInterface:
                         outputs=[chatbot],
                     )
 
+                    # Feedback button handlers
+                    thumbs_up_btn.click(
+                        fn=lambda history: self.handle_feedback("liked", history),
+                        inputs=[chatbot],
+                        outputs=[chatbot],
+                    )
+
+                    thumbs_down_btn.click(
+                        fn=lambda history: self.handle_feedback("disliked", history),
+                        inputs=[chatbot],
+                        outputs=[chatbot],
+                    )
+
                 # ===== LOGS TAB =====
                 with gr.Tab("📊 Logs"):
-                    gr.Markdown("Monitor LLM calls and command executions in real-time.")
+                    gr.Markdown("View all events chronologically, grouped by session.")
+
+                    # Session filter
+                    with gr.Row():
+                        # Get initial session choices
+                        initial_sessions = self.log_reader.get_sessions()
+                        session_choices = [("All Sessions", "All")]
+                        for session in initial_sessions:
+                            session_id_short = session["session_id"][:8]
+                            count = session["command_count"]
+                            start_time = session.get("start_time", "")[:19]
+                            label = f"{session_id_short}... ({count} cmds, {start_time})"
+                            session_choices.append((label, session["session_id"]))
+
+                        session_filter = gr.Dropdown(
+                            choices=session_choices,
+                            value="All",
+                            label="Filter by Session",
+                            scale=2,
+                        )
+                        refresh_sessions_btn = gr.Button("🔄 Refresh Sessions", size="sm", scale=0)
+
+                    # Refresh sessions button
+                    refresh_sessions_btn.click(
+                        fn=self.load_sessions,
+                        outputs=[session_filter],
+                    )
+
+                    # Unified log viewer
+                    gr.Markdown("### Event Log (grouped by session)")
+
+                    with gr.Row():
+                        log_limit = gr.Slider(
+                            minimum=20,
+                            maximum=500,
+                            value=100,
+                            step=20,
+                            label="Max Entries",
+                            scale=2,
+                        )
+                        refresh_log_btn = gr.Button("🔄 Refresh", size="sm", scale=0)
+
+                    # Initialize with empty data
+                    initial_log_data, initial_log_headers = self.load_unified_logs()
+                    unified_table = gr.Dataframe(
+                        value=initial_log_data,
+                        headers=initial_log_headers,
+                        label="All Events (LLM Calls, Executions, Feedback)",
+                        wrap=True,
+                        column_widths=["8%", "8%", "8%", "10%", "60%", "6%"],
+                        max_height=700,
+                    )
+
+                    # Helper function to return only data
+                    def refresh_unified_table(limit, session):
+                        data, _ = self.load_unified_logs(limit, session)
+                        return data
+
+                    # Refresh button
+                    refresh_log_btn.click(
+                        fn=refresh_unified_table,
+                        inputs=[log_limit, session_filter],
+                        outputs=[unified_table],
+                    )
+
+                    # Auto-refresh on slider change
+                    log_limit.change(
+                        fn=refresh_unified_table,
+                        inputs=[log_limit, session_filter],
+                        outputs=[unified_table],
+                    )
+
+                    # Auto-refresh on session filter change
+                    session_filter.change(
+                        fn=refresh_unified_table,
+                        inputs=[log_limit, session_filter],
+                        outputs=[unified_table],
+                    )
+
+                # ===== STATISTICS TAB =====
+                with gr.Tab("📈 Statistics"):
+                    gr.Markdown("Summary statistics for LLM calls, executions, and feedback.")
 
                     # Statistics section
                     with gr.Row():
@@ -292,102 +488,6 @@ class GradioInterface:
                         fn=self.load_log_stats,
                         outputs=[stats_display],
                     )
-
-                    # Log viewer tabs
-                    with gr.Tabs():
-                        # LLM Calls tab
-                        with gr.Tab("LLM Calls"):
-                            with gr.Row():
-                                provider_filter = gr.Dropdown(
-                                    choices=["All", "Anthropic", "OpenAI", "Google"],
-                                    value="All",
-                                    label="Filter by Provider",
-                                    scale=1,
-                                )
-                                llm_limit = gr.Slider(
-                                    minimum=10,
-                                    maximum=200,
-                                    value=50,
-                                    step=10,
-                                    label="Max Entries",
-                                    scale=1,
-                                )
-                                refresh_llm_btn = gr.Button("🔄 Refresh", size="sm", scale=0)
-
-                            # Initialize with empty data
-                            initial_data, initial_headers = self.load_llm_logs()
-                            llm_table = gr.Dataframe(
-                                value=initial_data,
-                                headers=initial_headers,
-                                label="LLM Call Logs",
-                                wrap=True,
-                            )
-
-                            # Helper function to return only data
-                            def refresh_llm_table(limit, provider):
-                                data, _ = self.load_llm_logs(limit, provider)
-                                return data
-
-                            # Refresh button
-                            refresh_llm_btn.click(
-                                fn=refresh_llm_table,
-                                inputs=[llm_limit, provider_filter],
-                                outputs=[llm_table],
-                            )
-
-                            # Auto-refresh on filter change
-                            provider_filter.change(
-                                fn=refresh_llm_table,
-                                inputs=[llm_limit, provider_filter],
-                                outputs=[llm_table],
-                            )
-
-                            llm_limit.change(
-                                fn=refresh_llm_table,
-                                inputs=[llm_limit, provider_filter],
-                                outputs=[llm_table],
-                            )
-
-                        # Executions tab
-                        with gr.Tab("Command Executions"):
-                            with gr.Row():
-                                exec_limit = gr.Slider(
-                                    minimum=10,
-                                    maximum=200,
-                                    value=50,
-                                    step=10,
-                                    label="Max Entries",
-                                    scale=1,
-                                )
-                                refresh_exec_btn = gr.Button("🔄 Refresh", size="sm", scale=0)
-
-                            # Initialize with empty data
-                            initial_exec_data, initial_exec_headers = self.load_execution_logs()
-                            exec_table = gr.Dataframe(
-                                value=initial_exec_data,
-                                headers=initial_exec_headers,
-                                label="Execution Logs",
-                                wrap=True,
-                            )
-
-                            # Helper function to return only data
-                            def refresh_exec_table(limit):
-                                data, _ = self.load_execution_logs(limit)
-                                return data
-
-                            # Refresh button
-                            refresh_exec_btn.click(
-                                fn=refresh_exec_table,
-                                inputs=[exec_limit],
-                                outputs=[exec_table],
-                            )
-
-                            # Auto-refresh on slider change
-                            exec_limit.change(
-                                fn=refresh_exec_table,
-                                inputs=[exec_limit],
-                                outputs=[exec_table],
-                            )
 
         return interface
 

@@ -42,6 +42,7 @@ class LLMCallLogger:
         system_prompt: str,
         request_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         """
         Log an LLM API request.
@@ -54,6 +55,7 @@ class LLMCallLogger:
             system_prompt: System prompt used for the request
             request_id: Optional request ID for correlation (generated if not provided)
             metadata: Optional additional metadata to log
+            session_id: Optional session ID for tracking
 
         Returns:
             Request ID for correlating with response
@@ -73,6 +75,7 @@ class LLMCallLogger:
             "conversation_history": conversation_history,
             "conversation_length": len(conversation_history),
             "system_prompt": system_prompt,
+            "session_id": session_id,
         }
 
         if metadata:
@@ -89,6 +92,7 @@ class LLMCallLogger:
         token_usage: Optional[Dict[str, int]] = None,
         error: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """
         Log an LLM API response.
@@ -100,6 +104,7 @@ class LLMCallLogger:
             token_usage: Token usage statistics (input_tokens, output_tokens)
             error: Error message if request failed
             metadata: Optional additional metadata to log
+            session_id: Optional session ID for tracking
         """
         if not self.enabled:
             return
@@ -113,6 +118,7 @@ class LLMCallLogger:
             "token_usage": token_usage or {},
             "error": error,
             "success": error is None,
+            "session_id": session_id,
         }
 
         if metadata:
@@ -186,6 +192,7 @@ class ExecutionLogger:
         validation_result: bool,
         checks: Dict[str, bool],
         error_message: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """
         Log command validation results.
@@ -195,6 +202,7 @@ class ExecutionLogger:
             validation_result: Whether validation passed
             checks: Dictionary of individual check results
             error_message: Error message if validation failed
+            session_id: Optional session ID for tracking
         """
         if not self.enabled:
             return
@@ -206,6 +214,7 @@ class ExecutionLogger:
             "validation_result": "passed" if validation_result else "failed",
             "checks": checks,
             "error_message": error_message,
+            "session_id": session_id,
         }
 
         self._write_json(log_entry)
@@ -219,6 +228,7 @@ class ExecutionLogger:
         stdout: str = "",
         stderr: str = "",
         error_message: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """
         Log command execution results.
@@ -231,6 +241,7 @@ class ExecutionLogger:
             stdout: Standard output from command
             stderr: Standard error from command
             error_message: Error message if execution failed
+            session_id: Optional session ID for tracking
         """
         if not self.enabled:
             return
@@ -245,6 +256,7 @@ class ExecutionLogger:
             "stdout": stdout[:500] if stdout else "",  # Truncate long output
             "stderr": stderr[:500] if stderr else "",
             "error_message": error_message,
+            "session_id": session_id,
         }
 
         self._write_json(log_entry)
@@ -272,6 +284,39 @@ class ExecutionLogger:
             "action": action,
             "command": command,
             "auto_execute": auto_execute,
+        }
+
+        self._write_json(log_entry)
+
+    def log_feedback(
+        self,
+        command: str,
+        feedback: str,
+        message_index: Optional[int] = None,
+        output_file: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
+        """
+        Log user feedback on command execution.
+
+        Args:
+            command: Command that feedback is for
+            feedback: Feedback type ('liked' or 'disliked')
+            message_index: Index of the message in chat history
+            output_file: Output file associated with the command
+            session_id: Optional session ID for tracking
+        """
+        if not self.enabled:
+            return
+
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": "user_feedback",
+            "command": command,
+            "feedback": feedback,
+            "message_index": message_index,
+            "output_file": output_file,
+            "session_id": session_id,
         }
 
         self._write_json(log_entry)

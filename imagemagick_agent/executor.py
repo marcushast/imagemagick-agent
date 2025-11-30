@@ -35,14 +35,16 @@ class CommandExecutor:
         "@",  # File reference that could be exploited
     }
 
-    def __init__(self, execution_logger=None):
+    def __init__(self, execution_logger=None, session_id: Optional[str] = None):
         """Initialize the executor.
 
         Args:
             execution_logger: Optional ExecutionLogger for audit trail
+            session_id: Optional session ID for tracking
         """
         self.imagemagick_command = self._detect_imagemagick_command()
         self.execution_logger = execution_logger
+        self.session_id = session_id
         self.logger = logging.getLogger("imagemagick_agent.executor")
         self.logger.info(f"CommandExecutor initialized with {self.imagemagick_command} command")
 
@@ -135,7 +137,9 @@ class CommandExecutor:
             error_message: Error message if validation failed
         """
         if self.execution_logger:
-            self.execution_logger.log_validation(command, passed, checks, error_message)
+            self.execution_logger.log_validation(
+                command, passed, checks, error_message, session_id=self.session_id
+            )
 
         if passed:
             self.logger.debug(f"Command validation passed: {command}")
@@ -263,6 +267,7 @@ class CommandExecutor:
                 stdout=result.stdout,
                 stderr=result.stderr,
                 error_message=result.error_message,
+                session_id=self.session_id,
             )
 
         if result.success:
@@ -310,3 +315,11 @@ class CommandExecutor:
             return None
         except Exception:
             return None
+
+    def set_session_id(self, session_id: str) -> None:
+        """Set the current session ID.
+
+        Args:
+            session_id: The new session ID
+        """
+        self.session_id = session_id

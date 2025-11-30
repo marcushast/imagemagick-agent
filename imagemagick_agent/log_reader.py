@@ -31,6 +31,7 @@ class LogReader:
         limit: int = 100,
         provider: Optional[str] = None,
         success: Optional[bool] = None,
+        session_id: Optional[str] = None,
     ) -> List[Dict]:
         """
         Get LLM call logs with optional filtering.
@@ -39,6 +40,7 @@ class LogReader:
             limit: Maximum number of entries to return
             provider: Filter by provider (anthropic, openai, google)
             success: Filter by success status
+            session_id: Filter by session ID
 
         Returns:
             List of log entries (most recent first)
@@ -58,6 +60,8 @@ class LogReader:
                         continue
                     if success is not None and log.get("success") != success:
                         continue
+                    if session_id and log.get("session_id") != session_id:
+                        continue
 
                     logs.append(log)
 
@@ -74,6 +78,7 @@ class LogReader:
         self,
         limit: int = 100,
         success: Optional[bool] = None,
+        session_id: Optional[str] = None,
     ) -> List[Dict]:
         """
         Get command execution logs with optional filtering.
@@ -81,6 +86,7 @@ class LogReader:
         Args:
             limit: Maximum number of entries to return
             success: Filter by success status
+            session_id: Filter by session ID
 
         Returns:
             List of log entries (most recent first)
@@ -97,6 +103,8 @@ class LogReader:
 
                     # Apply filters
                     if success is not None and log.get("success") != success:
+                        continue
+                    if session_id and log.get("session_id") != session_id:
                         continue
 
                     logs.append(log)
@@ -129,6 +137,11 @@ class LogReader:
                 "successful": 0,
                 "failed": 0,
                 "avg_execution_time_ms": 0,
+            },
+            "feedback": {
+                "total": 0,
+                "liked": 0,
+                "disliked": 0,
             },
         }
 
@@ -164,7 +177,7 @@ class LogReader:
                     sum(response_times) / len(response_times), 2
                 )
 
-        # Process executions
+        # Process executions and feedback
         if self.exec_log_file.exists():
             execution_times = []
             with open(self.exec_log_file, "r") as f:
@@ -180,6 +193,12 @@ class LogReader:
 
                             if "execution_time_ms" in log:
                                 execution_times.append(log["execution_time_ms"])
+                        elif log.get("event") == "user_feedback":
+                            stats["feedback"]["total"] += 1
+                            if log.get("feedback") == "liked":
+                                stats["feedback"]["liked"] += 1
+                            elif log.get("feedback") == "disliked":
+                                stats["feedback"]["disliked"] += 1
                     except json.JSONDecodeError:
                         continue
 
@@ -340,5 +359,256 @@ class LogReader:
                         status,
                     ]
                 )
+            elif event == "user_feedback":
+                feedback = log.get("feedback", "")
+                status = "👍" if feedback == "liked" else "👎"
+
+                output_file = log.get("output_file", "-")
+                if output_file and output_file != "-":
+                    output_file = Path(output_file).name
+
+                table_data.append(
+                    [
+                        time_str,
+                        "Feedback",
+                        log.get("command", "")[:50] + "...",
+                        feedback.capitalize(),
+                        "-",
+                        output_file,
+                        status,
+                    ]
+                )
+
+        return table_data, headers
+
+    def get_sessions(self) -> List[Dict]:
+        """
+        Get all unique sessions from execution logs.
+
+        Returns:
+            List of session dictionaries with metadata (session_id, start_time, command_count)
+            Sorted by most recent first
+        """
+        sessions = {}
+
+        if not self.exec_log_file.exists():
+            return []
+
+        with open(self.exec_log_file, "r") as f:
+            for line in f:
+                try:
+                    log = json.loads(line.strip())
+                    session_id = log.get("session_id")
+
+                    if not session_id:
+                        continue
+
+                    # Track session metadata
+                    if session_id not in sessions:
+                        sessions[session_id] = {
+                            "session_id": session_id,
+                            "start_time": log.get("timestamp"),
+                            "command_count": 0,
+                        }
+
+                    # Count command executions (not validations or feedback)
+                    if log.get("event") == "command_execution":
+                        sessions[session_id]["command_count"] += 1
+
+                    # Update to latest timestamp
+                    sessions[session_id]["last_activity"] = log.get("timestamp")
+
+                except json.JSONDecodeError:
+                    continue
+
+        # Convert to list and sort by start time (most recent first)
+        session_list = list(sessions.values())
+        session_list.sort(key=lambda x: x.get("start_time", ""), reverse=True)
+
+        return session_list
+
+    def get_unified_logs(
+        self,
+        limit: int = 100,
+        session_id: Optional[str] = None,
+    ) -> List[Dict]:
+        """
+        Get unified logs combining LLM calls and command executions.
+
+        Args:
+            limit: Maximum number of entries to return
+            session_id: Filter by session ID
+
+        Returns:
+            List of log entries (most recent first), sorted by timestamp
+        """
+        all_logs = []
+
+        # Get LLM call logs
+        if self.llm_log_file.exists():
+            with open(self.llm_log_file, "r") as f:
+                for line in f:
+                    try:
+                        log = json.loads(line.strip())
+                        # Apply session filter
+                        if session_id and log.get("session_id") != session_id:
+                            continue
+                        log["log_type"] = "llm"
+                        all_logs.append(log)
+                    except json.JSONDecodeError:
+                        continue
+
+        # Get execution logs
+        if self.exec_log_file.exists():
+            with open(self.exec_log_file, "r") as f:
+                for line in f:
+                    try:
+                        log = json.loads(line.strip())
+                        # Apply session filter
+                        if session_id and log.get("session_id") != session_id:
+                            continue
+                        log["log_type"] = "execution"
+                        all_logs.append(log)
+                    except json.JSONDecodeError:
+                        continue
+
+        # Sort by timestamp (most recent first)
+        all_logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        # Apply limit
+        return all_logs[:limit]
+
+    def format_unified_logs_for_display(
+        self, logs: List[Dict]
+    ) -> Tuple[List[List], List[str]]:
+        """
+        Format unified logs for display in a table with session grouping.
+
+        Args:
+            logs: List of log entries (already sorted)
+
+        Returns:
+            Tuple of (table_data, headers)
+        """
+        headers = [
+            "Session",
+            "Time",
+            "Type",
+            "Event",
+            "Details",
+            "Status",
+        ]
+
+        table_data = []
+        current_session = None
+
+        for log in logs:
+            event = log.get("event", "")
+            timestamp = log.get("timestamp", "")
+            session_id = log.get("session_id", "unknown")
+            log_type = log.get("log_type", "")
+
+            # Format timestamp
+            try:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                time_str = dt.strftime("%H:%M:%S")
+            except:
+                time_str = timestamp[:19] if len(timestamp) >= 19 else timestamp
+
+            # Session display (show first 8 chars of UUID)
+            session_display = session_id[:8] if session_id != "unknown" else "unknown"
+
+            # Add session separator if session changed
+            if session_id != current_session:
+                current_session = session_id
+                # Add a separator row
+                if table_data:  # Don't add separator before first session
+                    table_data.append(["════════", "════════", "════════", "════════", "════════", "════════"])
+
+            # Format based on log type and event
+            if log_type == "llm":
+                if event == "llm_request":
+                    user_input = log.get('user_input', '')
+                    table_data.append([
+                        session_display,
+                        time_str,
+                        "LLM",
+                        "Request",
+                        f"Provider: {log.get('provider', '')} | Input: {user_input}",
+                        "⏳",
+                    ])
+                elif event == "llm_response":
+                    success = log.get("success", False)
+                    status = "✅" if success else "❌"
+                    command = log.get("generated_command", log.get("error", ""))
+                    tokens = log.get("token_usage", {})
+                    token_str = f"{tokens.get('input_tokens', 0)}→{tokens.get('output_tokens', 0)}" if tokens else ""
+
+                    table_data.append([
+                        session_display,
+                        time_str,
+                        "LLM",
+                        "Response",
+                        f"Command: {command} | Tokens: {token_str} | {log.get('response_time_ms', 0):.0f}ms",
+                        status,
+                    ])
+
+            elif log_type == "execution":
+                if event == "command_validation":
+                    result = log.get("validation_result", "")
+                    status = "✅" if result == "passed" else "❌"
+                    command = log.get('command', '')
+                    error_msg = log.get("error_message", "")
+                    details = f"Command: {command}"
+                    if error_msg:
+                        details += f" | Error: {error_msg}"
+
+                    table_data.append([
+                        session_display,
+                        time_str,
+                        "Exec",
+                        "Validation",
+                        details,
+                        status,
+                    ])
+                elif event == "command_execution":
+                    success = log.get("success", False)
+                    status = "✅" if success else "❌"
+                    output_file = log.get("output_file", "")
+                    if output_file:
+                        output_file = Path(output_file).name
+
+                    command = log.get('command', '')
+                    details = f"Command: {command} | Output: {output_file or 'N/A'} | {log.get('execution_time_ms', 0):.0f}ms"
+
+                    if not success:
+                        error_msg = log.get("error_message", "")
+                        if error_msg:
+                            details += f" | Error: {error_msg}"
+
+                    table_data.append([
+                        session_display,
+                        time_str,
+                        "Exec",
+                        "Execution",
+                        details,
+                        status,
+                    ])
+                elif event == "user_feedback":
+                    feedback = log.get("feedback", "")
+                    status = "👍" if feedback == "liked" else "👎"
+                    output_file = log.get("output_file", "")
+                    if output_file:
+                        output_file = Path(output_file).name
+
+                    command = log.get('command', '')
+                    table_data.append([
+                        session_display,
+                        time_str,
+                        "Feedback",
+                        feedback.capitalize(),
+                        f"Command: {command} | Output: {output_file or 'N/A'}",
+                        status,
+                    ])
 
         return table_data, headers
