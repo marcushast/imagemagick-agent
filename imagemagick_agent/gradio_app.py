@@ -10,6 +10,7 @@ from .config import load_settings
 from .agent import ImageMagickAgent
 from .storage import FileStorage
 from .logging_config import setup_logging
+from .log_reader import LogReader
 
 
 class GradioInterface:
@@ -20,6 +21,7 @@ class GradioInterface:
         self.settings = load_settings()
         self.agent = ImageMagickAgent(self.settings)
         self.storage = FileStorage()
+        self.log_reader = LogReader(log_dir=self.settings.log_dir)
         self.last_command: Optional[str] = None
 
     def process_message(
@@ -195,6 +197,49 @@ class GradioInterface:
         self.last_command = None
         return [], None, ""
 
+    def load_log_stats(self):
+        """Load and format log statistics for display."""
+        stats = self.log_reader.get_stats()
+
+        stats_md = f"""
+## 📊 Statistics
+
+### LLM Calls
+- **Total:** {stats['llm_calls']['total']}
+- **Successful:** {stats['llm_calls']['successful']} ✅
+- **Failed:** {stats['llm_calls']['failed']} ❌
+- **Avg Response Time:** {stats['llm_calls']['avg_response_time_ms']:.0f} ms
+- **Total Tokens:** {stats['llm_calls']['total_tokens']['input'] + stats['llm_calls']['total_tokens']['output']:,} ({stats['llm_calls']['total_tokens']['input']:,} in / {stats['llm_calls']['total_tokens']['output']:,} out)
+
+### Command Executions
+- **Total:** {stats['executions']['total']}
+- **Successful:** {stats['executions']['successful']} ✅
+- **Failed:** {stats['executions']['failed']} ❌
+- **Avg Execution Time:** {stats['executions']['avg_execution_time_ms']:.0f} ms
+"""
+        return stats_md
+
+    def load_llm_logs(self, limit: int = 50, provider: str = "All"):
+        """Load and format LLM logs for display."""
+        provider_filter = None if provider == "All" else provider.lower()
+        logs = self.log_reader.get_llm_calls(limit=limit, provider=provider_filter)
+
+        if not logs:
+            return [], ["No logs available"]
+
+        table_data, headers = self.log_reader.format_llm_calls_for_display(logs)
+        return table_data, headers
+
+    def load_execution_logs(self, limit: int = 50):
+        """Load and format execution logs for display."""
+        logs = self.log_reader.get_executions(limit=limit)
+
+        if not logs:
+            return [], ["No logs available"]
+
+        table_data, headers = self.log_reader.format_executions_for_display(logs)
+        return table_data, headers
+
     def build_interface(self) -> gr.Blocks:
         """Build and return the Gradio interface.
 
@@ -202,93 +247,207 @@ class GradioInterface:
             Gradio Blocks interface
         """
         with gr.Blocks(title="ImageMagick Agent") as interface:
-            gr.Markdown(
-                """
-                # ImageMagick Agent
+            gr.Markdown("# 🎨 ImageMagick Agent")
 
-                Upload an image and describe transformations in natural language.
-                The agent will generate and execute ImageMagick commands for you.
+            with gr.Tabs():
+                # ===== CHAT TAB =====
+                with gr.Tab("💬 Chat"):
+                    gr.Markdown(
+                        """
+                        Upload an image and describe transformations in natural language.
+                        The agent will generate and execute ImageMagick commands for you.
 
-                **Examples:**
-                - "Resize this image to 800x600"
-                - "Add a 10px red border"
-                - "Rotate 45 degrees clockwise"
-                - "Convert to grayscale and add a blue tint"
-                """
-            )
+                        **Examples:**
+                        - "Resize this image to 800x600"
+                        - "Add a 10px red border"
+                        - "Rotate 45 degrees clockwise"
+                        - "Convert to grayscale and add a blue tint"
+                        """
+                    )
 
-            with gr.Row():
-                with gr.Column(scale=1):
-                    # Image upload
-                    image_input = gr.Image(
-                        label="Upload Image",
-                        type="filepath",
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            # Image upload
+                            image_input = gr.Image(
+                                label="Upload Image",
+                                type="filepath",
+                                height=300,
+                            )
+
+                            # Action buttons
+                            with gr.Row():
+                                reset_btn = gr.Button("Reset", variant="secondary")
+
+                            # Command display
+                            command_display = gr.Markdown(label="Last Command")
+
+                        with gr.Column(scale=2):
+                            # Chat interface
+                            chatbot = gr.Chatbot(
+                                label="Conversation",
+                                height=400,
+                            )
+
+                            # Message input
+                            msg_input = gr.Textbox(
+                                label="Your request",
+                                placeholder="Describe the transformation you want...",
+                                lines=2,
+                            )
+
+                            with gr.Row():
+                                submit_btn = gr.Button("Send", variant="primary")
+                                clear_btn = gr.ClearButton([msg_input])
+
+                    # Output gallery
+                    output_gallery = gr.Gallery(
+                        label="Output Images",
+                        columns=3,
                         height=300,
                     )
 
-                    # Action buttons
-                    with gr.Row():
-                        reset_btn = gr.Button("Reset", variant="secondary")
+                    # Event handlers
+                    def submit_message(message, history, image):
+                        if self.last_command and not self.settings.auto_execute:
+                            return self.handle_confirmation(message, history)
+                        return self.process_message(message, history, image)
 
-                    # Command display
-                    command_display = gr.Markdown(label="Last Command")
-
-                with gr.Column(scale=2):
-                    # Chat interface
-                    chatbot = gr.Chatbot(
-                        label="Conversation",
-                        height=400,
+                    # Submit on button click
+                    submit_btn.click(
+                        fn=submit_message,
+                        inputs=[msg_input, chatbot, image_input],
+                        outputs=[chatbot, output_gallery, command_display],
+                    ).then(
+                        lambda: "",  # Clear input after submit
+                        outputs=[msg_input],
                     )
 
-                    # Message input
-                    msg_input = gr.Textbox(
-                        label="Your request",
-                        placeholder="Describe the transformation you want...",
-                        lines=2,
+                    # Submit on Enter key
+                    msg_input.submit(
+                        fn=submit_message,
+                        inputs=[msg_input, chatbot, image_input],
+                        outputs=[chatbot, output_gallery, command_display],
+                    ).then(
+                        lambda: "",  # Clear input after submit
+                        outputs=[msg_input],
                     )
 
+                    # Reset button
+                    reset_btn.click(
+                        fn=self.reset_conversation,
+                        outputs=[chatbot, output_gallery, command_display],
+                    )
+
+                # ===== LOGS TAB =====
+                with gr.Tab("📊 Logs"):
+                    gr.Markdown("Monitor LLM calls and command executions in real-time.")
+
+                    # Statistics section
                     with gr.Row():
-                        submit_btn = gr.Button("Send", variant="primary")
-                        clear_btn = gr.ClearButton([msg_input])
+                        stats_display = gr.Markdown(value=self.load_log_stats())
+                        refresh_stats_btn = gr.Button("🔄 Refresh Stats", size="sm")
 
-            # Output gallery
-            output_gallery = gr.Gallery(
-                label="Output Images",
-                columns=3,
-                height=300,
-            )
+                    # Refresh stats button
+                    refresh_stats_btn.click(
+                        fn=self.load_log_stats,
+                        outputs=[stats_display],
+                    )
 
-            # Event handlers
-            def submit_message(message, history, image):
-                if self.last_command and not self.settings.auto_execute:
-                    return self.handle_confirmation(message, history)
-                return self.process_message(message, history, image)
+                    # Log viewer tabs
+                    with gr.Tabs():
+                        # LLM Calls tab
+                        with gr.Tab("LLM Calls"):
+                            with gr.Row():
+                                provider_filter = gr.Dropdown(
+                                    choices=["All", "Anthropic", "OpenAI", "Google"],
+                                    value="All",
+                                    label="Filter by Provider",
+                                    scale=1,
+                                )
+                                llm_limit = gr.Slider(
+                                    minimum=10,
+                                    maximum=200,
+                                    value=50,
+                                    step=10,
+                                    label="Max Entries",
+                                    scale=1,
+                                )
+                                refresh_llm_btn = gr.Button("🔄 Refresh", size="sm", scale=0)
 
-            # Submit on button click
-            submit_btn.click(
-                fn=submit_message,
-                inputs=[msg_input, chatbot, image_input],
-                outputs=[chatbot, output_gallery, command_display],
-            ).then(
-                lambda: "",  # Clear input after submit
-                outputs=[msg_input],
-            )
+                            # Initialize with empty data
+                            initial_data, initial_headers = self.load_llm_logs()
+                            llm_table = gr.Dataframe(
+                                value=initial_data,
+                                headers=initial_headers,
+                                label="LLM Call Logs",
+                                wrap=True,
+                            )
 
-            # Submit on Enter key
-            msg_input.submit(
-                fn=submit_message,
-                inputs=[msg_input, chatbot, image_input],
-                outputs=[chatbot, output_gallery, command_display],
-            ).then(
-                lambda: "",  # Clear input after submit
-                outputs=[msg_input],
-            )
+                            # Helper function to return only data
+                            def refresh_llm_table(limit, provider):
+                                data, _ = self.load_llm_logs(limit, provider)
+                                return data
 
-            # Reset button
-            reset_btn.click(
-                fn=self.reset_conversation,
-                outputs=[chatbot, output_gallery, command_display],
-            )
+                            # Refresh button
+                            refresh_llm_btn.click(
+                                fn=refresh_llm_table,
+                                inputs=[llm_limit, provider_filter],
+                                outputs=[llm_table],
+                            )
+
+                            # Auto-refresh on filter change
+                            provider_filter.change(
+                                fn=refresh_llm_table,
+                                inputs=[llm_limit, provider_filter],
+                                outputs=[llm_table],
+                            )
+
+                            llm_limit.change(
+                                fn=refresh_llm_table,
+                                inputs=[llm_limit, provider_filter],
+                                outputs=[llm_table],
+                            )
+
+                        # Executions tab
+                        with gr.Tab("Command Executions"):
+                            with gr.Row():
+                                exec_limit = gr.Slider(
+                                    minimum=10,
+                                    maximum=200,
+                                    value=50,
+                                    step=10,
+                                    label="Max Entries",
+                                    scale=1,
+                                )
+                                refresh_exec_btn = gr.Button("🔄 Refresh", size="sm", scale=0)
+
+                            # Initialize with empty data
+                            initial_exec_data, initial_exec_headers = self.load_execution_logs()
+                            exec_table = gr.Dataframe(
+                                value=initial_exec_data,
+                                headers=initial_exec_headers,
+                                label="Execution Logs",
+                                wrap=True,
+                            )
+
+                            # Helper function to return only data
+                            def refresh_exec_table(limit):
+                                data, _ = self.load_execution_logs(limit)
+                                return data
+
+                            # Refresh button
+                            refresh_exec_btn.click(
+                                fn=refresh_exec_table,
+                                inputs=[exec_limit],
+                                outputs=[exec_table],
+                            )
+
+                            # Auto-refresh on slider change
+                            exec_limit.change(
+                                fn=refresh_exec_table,
+                                inputs=[exec_limit],
+                                outputs=[exec_table],
+                            )
 
         return interface
 
