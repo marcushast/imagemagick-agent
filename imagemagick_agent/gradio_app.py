@@ -31,8 +31,8 @@ class GradioInterface:
         message: str,
         chat_history: List[dict],
         uploaded_image: Optional[str],
-    ) -> Tuple[List[dict], Optional[List[str]], str]:
-        """Process a user message and return updated chat history.
+    ) -> List[dict]:
+        """Process a user message and return updated chat history with inline images.
 
         Args:
             message: User's message
@@ -40,10 +40,10 @@ class GradioInterface:
             uploaded_image: Path to uploaded image (if any)
 
         Returns:
-            Tuple of (updated_chat_history, output_images, command_display)
+            Updated chat history with inline images
         """
         if not message.strip():
-            return chat_history, None, ""
+            return chat_history
 
         # Handle file upload
         if uploaded_image:
@@ -57,7 +57,7 @@ class GradioInterface:
                 error_msg = f"Error uploading file: {str(e)}"
                 chat_history.append({"role": "user", "content": message})
                 chat_history.append({"role": "assistant", "content": error_msg})
-                return chat_history, None, ""
+                return chat_history
 
         # Add user message to chat
         chat_history.append({"role": "user", "content": message})
@@ -70,20 +70,20 @@ class GradioInterface:
             if "clarification" in result:
                 response = result["clarification"]
                 chat_history.append({"role": "assistant", "content": response})
-                return chat_history, None, ""
+                return chat_history
 
             # Handle errors
             if result.get("error"):
                 response = f"Error: {result['error']}"
                 chat_history.append({"role": "assistant", "content": response})
-                return chat_history, None, ""
+                return chat_history
 
             # Get the command
             command = result.get("command")
             if not command:
                 response = "I couldn't generate a command. Please try rephrasing your request."
                 chat_history.append({"role": "assistant", "content": response})
-                return chat_history, None, ""
+                return chat_history
 
             # Substitute file paths if we have an uploaded file
             working_command = command
@@ -98,73 +98,30 @@ class GradioInterface:
                 if filename_only in working_command:
                     working_command = working_command.replace(filename_only, str(latest_upload))
 
-            # Store the command with paths substituted for later execution
-            self.last_command = working_command
+            # Always auto-execute the command
+            execution_result = self.agent.execute_command(working_command)
+            response_text = self._format_execution_result(execution_result)
 
-            # Auto-execute if configured, otherwise ask for confirmation
-            if self.settings.auto_execute:
-                execution_result = self.agent.execute_command(working_command)
-                response = self._format_execution_result(execution_result)
-                chat_history.append({"role": "assistant", "content": response})
+            # Show the command that was executed
+            command_text = f"**Generated Command:**\n```bash\n{working_command}\n```\n\n{response_text}"
+            chat_history.append({"role": "assistant", "content": command_text})
 
-                # Track output files and prepare gallery
-                output_images = []
-                if execution_result.success and execution_result.output_file:
-                    self.storage.add_output_file(execution_result.output_file)
-                    output_images = [str(f) for f in self.storage.get_output_files()]
+            # If successful and there's an output file, show it inline as a separate message
+            if execution_result.success and execution_result.output_file:
+                self.storage.add_output_file(execution_result.output_file)
+                # Add the image as a file message
+                chat_history.append({
+                    "role": "assistant",
+                    "content": {"path": str(execution_result.output_file)}
+                })
 
-                return chat_history, output_images, f"Command: `{working_command}`"
-            else:
-                # Show command and wait for confirmation
-                response = f"Generated command:\n```\n{working_command}\n```\n\nReply 'yes' to execute or 'no' to cancel."
-                chat_history.append({"role": "assistant", "content": response})
-                return chat_history, None, f"Command: `{working_command}`"
+            return chat_history
 
         except Exception as e:
             error_msg = f"Unexpected error: {str(e)}"
             chat_history.append({"role": "assistant", "content": error_msg})
-            return chat_history, None, ""
+            return chat_history
 
-    def handle_confirmation(
-        self, message: str, chat_history: List[dict]
-    ) -> Tuple[List[dict], Optional[List[str]], str]:
-        """Handle user confirmation for command execution.
-
-        Args:
-            message: User's response
-            chat_history: Current chat history
-
-        Returns:
-            Tuple of (updated_chat_history, output_images, command_display)
-        """
-        if not self.last_command:
-            return self.process_message(message, chat_history, None)
-
-        if message.lower().strip() in ["yes", "y", "execute", "run"]:
-            # Execute the command
-            chat_history.append({"role": "user", "content": message})
-
-            execution_result = self.agent.execute_command(self.last_command)
-            response = self._format_execution_result(execution_result)
-            chat_history.append({"role": "assistant", "content": response})
-
-            # Track output files and prepare gallery
-            output_images = []
-            if execution_result.success and execution_result.output_file:
-                self.storage.add_output_file(execution_result.output_file)
-                output_images = [str(f) for f in self.storage.get_output_files()]
-
-            self.last_command = None
-            return chat_history, output_images, ""
-
-        elif message.lower().strip() in ["no", "n", "cancel"]:
-            chat_history.append({"role": "user", "content": message})
-            chat_history.append({"role": "assistant", "content": "Command cancelled."})
-            self.last_command = None
-            return chat_history, None, ""
-
-        # Not a confirmation, process as new message
-        return self.process_message(message, chat_history, None)
 
     def _format_execution_result(self, result) -> str:
         """Format execution result for display.
@@ -188,16 +145,16 @@ class GradioInterface:
                 msg += f"\n\nError details:\n```\n{result.stderr}\n```"
             return msg
 
-    def reset_conversation(self) -> Tuple[List, None, str]:
+    def reset_conversation(self) -> List:
         """Reset the conversation and storage.
 
         Returns:
-            Tuple of (empty_chat_history, None, empty_command)
+            Empty chat history
         """
         self.agent.reset_conversation()
         self.storage.reset()
         self.last_command = None
-        return [], None, ""
+        return []
 
     def load_log_stats(self):
         """Load and format log statistics for display."""
@@ -257,7 +214,7 @@ class GradioInterface:
                     gr.Markdown(
                         """
                         Upload an image and describe transformations in natural language.
-                        The agent will generate and execute ImageMagick commands for you.
+                        The agent will generate and execute ImageMagick commands automatically.
 
                         **Examples:**
                         - "Resize this image to 800x600"
@@ -267,58 +224,39 @@ class GradioInterface:
                         """
                     )
 
-                    with gr.Row():
-                        with gr.Column(scale=1):
-                            # Image upload
-                            image_input = gr.Image(
-                                label="Upload Image",
-                                type="filepath",
-                                height=300,
-                            )
-
-                            # Action buttons
-                            with gr.Row():
-                                reset_btn = gr.Button("Reset", variant="secondary")
-
-                            # Command display
-                            command_display = gr.Markdown(label="Last Command")
-
-                        with gr.Column(scale=2):
-                            # Chat interface
-                            chatbot = gr.Chatbot(
-                                label="Conversation",
-                                height=400,
-                            )
-
-                            # Message input
-                            msg_input = gr.Textbox(
-                                label="Your request",
-                                placeholder="Describe the transformation you want...",
-                                lines=2,
-                            )
-
-                            with gr.Row():
-                                submit_btn = gr.Button("Send", variant="primary")
-                                clear_btn = gr.ClearButton([msg_input])
-
-                    # Output gallery
-                    output_gallery = gr.Gallery(
-                        label="Output Images",
-                        columns=3,
+                    # Single column layout
+                    # Image upload
+                    image_input = gr.Image(
+                        label="Upload Image",
+                        type="filepath",
                         height=300,
                     )
 
-                    # Event handlers
-                    def submit_message(message, history, image):
-                        if self.last_command and not self.settings.auto_execute:
-                            return self.handle_confirmation(message, history)
-                        return self.process_message(message, history, image)
+                    # Chat interface
+                    chatbot = gr.Chatbot(
+                        label="Conversation",
+                        height=500,
+                    )
 
+                    # Message input
+                    msg_input = gr.Textbox(
+                        label="Your request",
+                        placeholder="Describe the transformation you want...",
+                        lines=1,
+                        max_lines=5,
+                    )
+
+                    with gr.Row():
+                        submit_btn = gr.Button("Send", variant="primary")
+                        clear_btn = gr.ClearButton([msg_input])
+                        reset_btn = gr.Button("Reset Conversation", variant="secondary")
+
+                    # Event handlers
                     # Submit on button click
                     submit_btn.click(
-                        fn=submit_message,
+                        fn=self.process_message,
                         inputs=[msg_input, chatbot, image_input],
-                        outputs=[chatbot, output_gallery, command_display],
+                        outputs=[chatbot],
                     ).then(
                         lambda: "",  # Clear input after submit
                         outputs=[msg_input],
@@ -326,9 +264,9 @@ class GradioInterface:
 
                     # Submit on Enter key
                     msg_input.submit(
-                        fn=submit_message,
+                        fn=self.process_message,
                         inputs=[msg_input, chatbot, image_input],
-                        outputs=[chatbot, output_gallery, command_display],
+                        outputs=[chatbot],
                     ).then(
                         lambda: "",  # Clear input after submit
                         outputs=[msg_input],
@@ -337,7 +275,7 @@ class GradioInterface:
                     # Reset button
                     reset_btn.click(
                         fn=self.reset_conversation,
-                        outputs=[chatbot, output_gallery, command_display],
+                        outputs=[chatbot],
                     )
 
                 # ===== LOGS TAB =====
