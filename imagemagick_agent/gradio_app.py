@@ -655,6 +655,7 @@ def launch(share: bool = False, server_port: int = 7860):
     # This allows our signal handlers to stay active
     interface.launch(
         share=share,
+        server_name="0.0.0.0",  # Listen on all interfaces (required for Docker)
         server_port=server_port,
         show_error=True,
         quiet=False,

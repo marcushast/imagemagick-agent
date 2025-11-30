@@ -1,0 +1,80 @@
+services:
+  imagemagick-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: imagemagick-agent:latest
+    container_name: imagemagick-agent
+
+    # Ports
+    ports:
+      - "7860:7860"  # Gradio web interface
+      - "5000:5000"  # Log viewer (optional)
+
+    # Environment variables
+    environment:
+      # LLM Provider Configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - LLM_MODEL=${LLM_MODEL:-claude-3-5-sonnet-20241022}
+      - AUTO_EXECUTE=${AUTO_EXECUTE:-false}
+
+      # API Keys (from .env file or environment)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+
+      # Logging Configuration
+      - ENABLE_LOGGING=${ENABLE_LOGGING:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/app/logs
+      - ENABLE_LLM_LOGGING=${ENABLE_LLM_LOGGING:-true}
+      - ENABLE_EXECUTION_LOGGING=${ENABLE_EXECUTION_LOGGING:-true}
+      - LOG_MAX_BYTES=${LOG_MAX_BYTES:-10000000}
+      - LOG_BACKUP_COUNT=${LOG_BACKUP_COUNT:-5}
+
+    # Volume mounts
+    volumes:
+      # Persistent logs
+      - ./logs:/app/logs
+      # Data directory for input/output images
+      - ./data:/app/data
+      # Optional: mount custom .env file
+      # - ./.env:/app/.env:ro
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Resource limits (optional, adjust as needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+
+  # Optional: Separate service for log viewer
+  # Uncomment if you want to run the log viewer as a separate service
+  # log-viewer:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   image: imagemagick-agent:latest
+  #   container_name: imagemagick-agent-logs
+  #   command: imagemagick-agent-logs
+  #   ports:
+  #     - "5001:5000"
+  #   volumes:
+  #     - ./logs:/app/logs:ro
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - imagemagick-agent
