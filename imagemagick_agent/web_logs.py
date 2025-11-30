@@ -9,6 +9,7 @@ Provides a Flask-based dashboard for:
 """
 
 import json
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -341,12 +342,21 @@ def run_server(log_dir: Path = Path("logs"), port: int = 5000, debug: bool = Fal
     Args:
         log_dir: Directory containing log files
         port: Port to run server on
-        debug: Enable Flask debug mode
+        debug: Enable Flask debug mode (only affects Flask's error pages, uses Waitress regardless)
     """
+    from waitress import serve
+
     app = create_app(log_dir)
     print(f"\n🌐 Log Viewer starting at http://localhost:{port}")
-    print(f"📁 Log directory: {log_dir.absolute()}\n")
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    print(f"📁 Log directory: {log_dir.absolute()}")
+    print("Press Ctrl+C to quit\n")
+
+    try:
+        # Use Waitress for production-ready serving with proper signal handling
+        serve(app, host="0.0.0.0", port=port, threads=4, _quiet=False)
+    except KeyboardInterrupt:
+        print("\n\nShutting down log viewer...")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

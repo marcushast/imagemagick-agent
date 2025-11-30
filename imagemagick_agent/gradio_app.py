@@ -1,7 +1,9 @@
 """Gradio web interface for ImageMagick Agent."""
 
+import os
 import signal
 import sys
+import time
 import gradio as gr
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -477,27 +479,46 @@ def launch(share: bool = False, server_port: int = 7860):
         except Exception as e:
             print(f"Warning: Could not initialize logging: {e}")
 
-    # Set up signal handlers for graceful shutdown
+    app = GradioInterface()
+    interface = app.build_interface()
+
+    # Set up aggressive signal handlers that force immediate exit
+    # These will override any handlers Gradio sets up
+    shutdown_flag = {"triggered": False}
+
     def signal_handler(sig, frame):
-        print("\n\nShutting down server...")
-        sys.exit(0)
+        if shutdown_flag["triggered"]:
+            # Second Ctrl-C - force kill
+            print("\nForce quitting...")
+            os._exit(1)
+        else:
+            shutdown_flag["triggered"] = True
+            print("\nShutting down server...")
+            os._exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    app = GradioInterface()
-    interface = app.build_interface()
+    # Launch server without blocking the thread
+    # This allows our signal handlers to stay active
+    interface.launch(
+        share=share,
+        server_port=server_port,
+        show_error=True,
+        quiet=False,
+        prevent_thread_lock=True,
+    )
 
+    print("Server is running. Press Ctrl+C to quit.\n")
+    sys.stdout.flush()
+
+    # Keep the main thread alive so our signal handlers work
     try:
-        interface.launch(
-            share=share,
-            server_port=server_port,
-            show_error=True,
-            quiet=False,
-        )
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("\n\nShutting down server...")
-        sys.exit(0)
+        print("\nShutting down server...")
+        os._exit(0)
 
 
 if __name__ == "__main__":
