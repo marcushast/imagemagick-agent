@@ -343,27 +343,15 @@ class GradioInterface:
                     # Message input
                     msg_input = gr.Textbox(
                         label="Your request",
-                        placeholder="Describe the transformation you want...",
+                        placeholder="Describe the transformation you want... (Press Enter to send)",
                         lines=1,
                         max_lines=5,
                     )
 
                     with gr.Row():
-                        submit_btn = gr.Button("Send", variant="primary")
-                        clear_btn = gr.ClearButton([msg_input])
                         reset_btn = gr.Button("Reset Conversation", variant="secondary")
 
                     # Event handlers
-                    # Submit on button click
-                    submit_btn.click(
-                        fn=self.process_message,
-                        inputs=[msg_input, chatbot, image_input],
-                        outputs=[chatbot],
-                    ).then(
-                        lambda: "",  # Clear input after submit
-                        outputs=[msg_input],
-                    )
-
                     # Submit on Enter key
                     msg_input.submit(
                         fn=self.process_message,
