@@ -30,13 +30,15 @@ class GradioInterface:
         # Track commands by message index for feedback logging
         self.command_map = {}  # {message_index: {"command": str, "output_file": str}}
         self.last_command_index: Optional[int] = None
+        # Track last uploaded image path to avoid duplicate upload messages
+        self.last_uploaded_path: Optional[str] = None
 
     def process_message(
         self,
         message: str,
         chat_history: List[dict],
         uploaded_image: Optional[str],
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], gr.update, gr.update]:
         """Process a user message and return updated chat history with inline images.
 
         Args:
@@ -45,17 +47,20 @@ class GradioInterface:
             uploaded_image: Path to uploaded image (if any)
 
         Returns:
-            Updated chat history with inline images
+            Tuple of (updated chat history, accept button update, refine button update)
         """
         if not message.strip():
-            return chat_history
+            return chat_history, gr.update(visible=False), gr.update(visible=False)
 
-        # Handle file upload - start a new session
-        if uploaded_image:
+        # Handle file upload - start a new session (only if it's a NEW upload)
+        if uploaded_image and uploaded_image != self.last_uploaded_path:
             try:
                 saved_path = self.storage.save_uploaded_file(
                     uploaded_image, original_name=Path(uploaded_image).name
                 )
+                # Track this upload to avoid duplicate messages
+                self.last_uploaded_path = uploaded_image
+
                 # Start a new session when a new image is uploaded
                 self.agent.start_new_session()
                 upload_msg = f"(Image uploaded: {saved_path.name})"
@@ -64,7 +69,7 @@ class GradioInterface:
                 error_msg = f"Error uploading file: {str(e)}"
                 chat_history.append({"role": "user", "content": message})
                 chat_history.append({"role": "assistant", "content": error_msg})
-                return chat_history
+                return chat_history, gr.update(visible=False), gr.update(visible=False)
 
         # Add user message to chat
         chat_history.append({"role": "user", "content": message})
@@ -77,33 +82,46 @@ class GradioInterface:
             if "clarification" in result:
                 response = result["clarification"]
                 chat_history.append({"role": "assistant", "content": response})
-                return chat_history
+                return chat_history, gr.update(visible=False), gr.update(visible=False)
 
             # Handle errors
             if result.get("error"):
                 response = f"Error: {result['error']}"
                 chat_history.append({"role": "assistant", "content": response})
-                return chat_history
+                return chat_history, gr.update(visible=False), gr.update(visible=False)
 
             # Get the command
             command = result.get("command")
             if not command:
                 response = "I couldn't generate a command. Please try rephrasing your request."
                 chat_history.append({"role": "assistant", "content": response})
-                return chat_history
+                return chat_history, gr.update(visible=False), gr.update(visible=False)
 
-            # Substitute file paths if we have an uploaded file
+            # Substitute file paths with current working image
             working_command = command
-            latest_upload = self.storage.get_latest_upload()
-            if latest_upload:
+            working_image = self.storage.get_current_working_image()
+            original_upload = self.storage.original_upload
+
+            if working_image:
                 # Replace common placeholders with actual file path
                 for placeholder in ["input.jpg", "input.png", "image.jpg", "image.png"]:
-                    working_command = working_command.replace(placeholder, str(latest_upload))
+                    working_command = working_command.replace(placeholder, str(working_image))
 
-                # Also replace the actual uploaded filename (without path) with full path
-                filename_only = latest_upload.name
+                # Replace references to the original uploaded file with current working image
+                # This is crucial for chaining - after accepting, commands should use the new image
+                if original_upload and working_image != original_upload:
+                    # Replace the original filename (with or without path) with current working image
+                    original_name = original_upload.name
+                    if original_name in working_command:
+                        working_command = working_command.replace(original_name, str(working_image))
+                    # Also try with full path
+                    if str(original_upload) in working_command:
+                        working_command = working_command.replace(str(original_upload), str(working_image))
+
+                # Also replace the current working image filename (without path) with full path
+                filename_only = working_image.name
                 if filename_only in working_command:
-                    working_command = working_command.replace(filename_only, str(latest_upload))
+                    working_command = working_command.replace(filename_only, str(working_image))
 
             # Always auto-execute the command
             execution_result = self.agent.execute_command(working_command)
@@ -125,18 +143,23 @@ class GradioInterface:
             # If successful and there's an output file, show it inline as a separate message
             if execution_result.success and execution_result.output_file:
                 self.storage.add_output_file(execution_result.output_file)
+                # Set as pending output (awaiting user acceptance)
+                self.storage.set_pending_output(execution_result.output_file)
                 # Add the image as a file message
                 chat_history.append({
                     "role": "assistant",
                     "content": {"path": str(execution_result.output_file)}
                 })
+                # Show accept/refine buttons
+                return chat_history, gr.update(visible=True), gr.update(visible=True)
 
-            return chat_history
+            # No output file or execution failed - hide buttons
+            return chat_history, gr.update(visible=False), gr.update(visible=False)
 
         except Exception as e:
             error_msg = f"Unexpected error: {str(e)}"
             chat_history.append({"role": "assistant", "content": error_msg})
-            return chat_history
+            return chat_history, gr.update(visible=False), gr.update(visible=False)
 
 
     def _format_execution_result(self, result) -> str:
@@ -171,6 +194,7 @@ class GradioInterface:
         self.storage.reset()
         self.last_command = None
         self.command_map.clear()
+        self.last_uploaded_path = None
         return []
 
     def handle_feedback(self, feedback_type: str, chat_history: List[dict]) -> List[dict]:
@@ -213,6 +237,76 @@ class GradioInterface:
             })
 
         return chat_history
+
+    def accept_result(self, chat_history: List[dict]) -> Tuple[List[dict], gr.update, gr.update]:
+        """Accept the current result and use it as input for next transformation.
+
+        Args:
+            chat_history: Current chat history
+
+        Returns:
+            Tuple of (updated chat history, accept button update, refine button update)
+        """
+        if not self.storage.has_pending_output():
+            chat_history.append({
+                "role": "assistant",
+                "content": "⚠️ No result to accept. Please run a transformation first."
+            })
+            return chat_history, gr.update(visible=False), gr.update(visible=False)
+
+        # Get the pending output filename before accepting
+        pending_file = self.storage.pending_output.name if self.storage.pending_output else "output"
+
+        # Accept the output as the new working image
+        self.storage.accept_output()
+
+        # Update the agent's conversation context to use the new input
+        # This tells the LLM that future commands should operate on this file
+        current_working = self.storage.get_current_working_image()
+        if current_working:
+            # Add a system-like message to inform about the new input
+            context_msg = f"[System: The current input image is now {current_working.name}. All future commands will use this as the input.]"
+            self.agent.conversation_history.append({
+                "role": "user",
+                "content": context_msg
+            })
+
+        # Add confirmation message
+        chat_history.append({
+            "role": "assistant",
+            "content": f"✅ Result accepted! The image `{pending_file}` will be used as input for the next transformation."
+        })
+
+        # Hide the accept/refine buttons
+        return chat_history, gr.update(visible=False), gr.update(visible=False)
+
+    def refine_result(self, chat_history: List[dict]) -> Tuple[List[dict], gr.update, gr.update]:
+        """Refine the current result (keep same input for next transformation).
+
+        Args:
+            chat_history: Current chat history
+
+        Returns:
+            Tuple of (updated chat history, accept button update, refine button update)
+        """
+        if not self.storage.has_pending_output():
+            chat_history.append({
+                "role": "assistant",
+                "content": "⚠️ No result to refine. Please run a transformation first."
+            })
+            return chat_history, gr.update(visible=False), gr.update(visible=False)
+
+        # Clear the pending output (keep current working image)
+        self.storage.pending_output = None
+
+        # Add confirmation message
+        chat_history.append({
+            "role": "assistant",
+            "content": "🔄 Ready to refine! Enter a new command to try again with the same input image."
+        })
+
+        # Hide the accept/refine buttons
+        return chat_history, gr.update(visible=False), gr.update(visible=False)
 
     def load_log_stats(self):
         """Load and format log statistics for display."""
@@ -312,6 +406,10 @@ class GradioInterface:
                         Upload an image and describe transformations in natural language.
                         The agent will generate and execute ImageMagick commands automatically.
 
+                        **Transformation Chaining:**
+                        - After each transformation, choose **Accept & Continue** to use the result as input for the next command
+                        - Or choose **Refine (Try Again)** to keep the same input and try a different transformation
+
                         **Examples:**
                         - "Resize this image to 800x600"
                         - "Add a 10px red border"
@@ -333,6 +431,21 @@ class GradioInterface:
                         label="Conversation",
                         height=500,
                     )
+
+                    # Accept/Refine buttons (hidden initially)
+                    with gr.Row(visible=True) as action_row:
+                        accept_btn = gr.Button(
+                            "✅ Accept & Continue",
+                            variant="primary",
+                            size="sm",
+                            visible=False,
+                        )
+                        refine_btn = gr.Button(
+                            "🔄 Refine (Try Again)",
+                            variant="secondary",
+                            size="sm",
+                            visible=False,
+                        )
 
                     # Feedback buttons
                     with gr.Row():
@@ -356,7 +469,7 @@ class GradioInterface:
                     msg_input.submit(
                         fn=self.process_message,
                         inputs=[msg_input, chatbot, image_input],
-                        outputs=[chatbot],
+                        outputs=[chatbot, accept_btn, refine_btn],
                     ).then(
                         lambda: "",  # Clear input after submit
                         outputs=[msg_input],
@@ -379,6 +492,19 @@ class GradioInterface:
                         fn=lambda history: self.handle_feedback("disliked", history),
                         inputs=[chatbot],
                         outputs=[chatbot],
+                    )
+
+                    # Accept/Refine button handlers
+                    accept_btn.click(
+                        fn=self.accept_result,
+                        inputs=[chatbot],
+                        outputs=[chatbot, accept_btn, refine_btn],
+                    )
+
+                    refine_btn.click(
+                        fn=self.refine_result,
+                        inputs=[chatbot],
+                        outputs=[chatbot, accept_btn, refine_btn],
                     )
 
                 # ===== LOGS TAB =====
