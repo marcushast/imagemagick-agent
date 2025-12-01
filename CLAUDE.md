@@ -17,6 +17,7 @@ An LLM-powered conversational agent for image editing using ImageMagick. Users d
 ### Prerequisites
 - Python 3.9+
 - ImageMagick CLI tools: `sudo apt-get install imagemagick` (Linux) or `brew install imagemagick` (macOS)
+- SVG support (optional): `sudo apt-get install librsvg2-bin` (Linux) or `brew install librsvg` (macOS)
 
 ### Installation
 ```bash

@@ -63,7 +63,7 @@ class GradioInterface:
 
                 # Start a new session when a new image is uploaded
                 self.agent.start_new_session()
-                upload_msg = f"(Image uploaded: {saved_path.name})"
+                upload_msg = f"(Image uploaded: {saved_path})"
                 message = f"{message} {upload_msg}"
             except Exception as e:
                 error_msg = f"Error uploading file: {str(e)}"

@@ -33,6 +33,7 @@ FROM python:3.11-slim
 # Install ImageMagick and runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     imagemagick \
+    librsvg2-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -53,7 +54,7 @@ COPY CLAUDE.md README.md ./
 RUN pip install --no-cache-dir -e .
 
 # Create necessary directories
-RUN mkdir -p /app/logs /app/data && \
+RUN mkdir -p /app/logs /app/data /app/uploads && \
     chown -R appuser:appuser /app
 
 # Switch to non-root user

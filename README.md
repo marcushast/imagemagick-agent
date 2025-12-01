@@ -16,6 +16,10 @@ An LLM-powered conversational agent that helps you edit images using ImageMagick
   - Ubuntu/Debian: `sudo apt-get install imagemagick`
   - macOS: `brew install imagemagick`
   - Windows: Download from [imagemagick.org](https://imagemagick.org/script/download.php)
+- SVG support (optional, for processing SVG files)
+  - Ubuntu/Debian: `sudo apt-get install librsvg2-bin`
+  - macOS: `brew install librsvg`
+  - Windows: Included with ImageMagick installer
 
 **Note:** The agent automatically detects your ImageMagick version and uses the appropriate command (`convert` for v6, `magick` for v7+).
 

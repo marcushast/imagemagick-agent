@@ -38,6 +38,8 @@ services:
       - ./logs:/app/logs
       # Data directory for input/output images
       - ./data:/app/data
+      # Uploads directory for web interface
+      - ./uploads:/app/uploads
       # Optional: mount custom .env file
       # - ./.env:/app/.env:ro
 
