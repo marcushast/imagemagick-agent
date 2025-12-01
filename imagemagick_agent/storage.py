@@ -162,9 +162,19 @@ class FileStorage:
         self.output_files = []
 
     def reset(self) -> None:
-        """Reset storage for a new session (clears tracking but keeps files)."""
-        self.uploaded_files = {}
+        """Reset storage for a new session (clears tracking but keeps files).
+
+        If there's an original upload, reset the current working image back to it.
+        This allows users to reset to the original image after accepting transformations.
+        """
+        # Keep the original upload if it exists, but reset current working image to it
+        if self.original_upload is not None:
+            self.current_working_image = self.original_upload
+        else:
+            self.current_working_image = None
+
+        # Clear output files and pending output
         self.output_files = []
-        self.current_working_image = None
-        self.original_upload = None
         self.pending_output = None
+
+        # Note: We keep uploaded_files and original_upload to maintain the session

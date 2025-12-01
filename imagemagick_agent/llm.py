@@ -32,6 +32,7 @@ Key guidelines:
 5. If the user's request is unclear, ask for clarification
 6. Consider the file format when choosing operations
 7. Use appropriate output file names (e.g., output.png, resized.jpg, etc.)
+8. IMPORTANT: Output filenames must be simple filenames only, WITHOUT any directory paths (e.g., use "output.png" NOT "outputs/output.png" or "./output.png")
 
 Example commands:
 - Resize: {imagemagick_command} input.jpg -resize 800x600 output.jpg

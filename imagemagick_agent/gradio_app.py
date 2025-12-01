@@ -188,14 +188,25 @@ class GradioInterface:
         """Reset the conversation and storage.
 
         Returns:
-            Empty chat history
+            Chat history with reset confirmation message
         """
+        # Check if we're resetting to an original image
+        has_original = self.storage.original_upload is not None
+
         self.agent.reset_conversation()
         self.storage.reset()
         self.last_command = None
         self.command_map.clear()
         self.last_uploaded_path = None
-        return []
+
+        # Provide feedback to the user
+        if has_original:
+            return [{
+                "role": "assistant",
+                "content": "🔄 Conversation reset! The working image has been reset to the original upload. You can continue editing from the beginning."
+            }]
+        else:
+            return []
 
     def handle_feedback(self, feedback_type: str, chat_history: List[dict]) -> List[dict]:
         """Handle user feedback (thumbs up/down) on the last command.

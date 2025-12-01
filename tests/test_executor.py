@@ -96,6 +96,40 @@ class TestCommandValidation:
         assert "empty" in error.lower()
 
 
+class TestOutputPathSanitization:
+    """Test output path sanitization."""
+
+    def test_sanitize_simple_filename(self, executor):
+        """Test that simple filenames are not changed."""
+        command = "magick input.jpg -resize 800x600 output.jpg"
+        sanitized = executor.sanitize_output_path(command)
+        assert sanitized == command
+
+    def test_sanitize_directory_path(self, executor):
+        """Test that directory paths are stripped from output filenames."""
+        command = "magick input.jpg -resize 800x600 outputs/output.jpg"
+        sanitized = executor.sanitize_output_path(command)
+        assert sanitized == "magick input.jpg -resize 800x600 output.jpg"
+
+    def test_sanitize_nested_directory_path(self, executor):
+        """Test that nested directory paths are stripped."""
+        command = "magick input.jpg -blur 0x8 path/to/outputs/blurred.png"
+        sanitized = executor.sanitize_output_path(command)
+        assert sanitized == "magick input.jpg -blur 0x8 blurred.png"
+
+    def test_sanitize_relative_path(self, executor):
+        """Test that relative paths (./) are stripped."""
+        command = "convert input.jpg -rotate 90 ./rotated.jpg"
+        sanitized = executor.sanitize_output_path(command)
+        assert sanitized == "convert input.jpg -rotate 90 rotated.jpg"
+
+    def test_sanitize_parent_directory_path(self, executor):
+        """Test that parent directory paths (../) are stripped."""
+        command = "magick input.jpg -border 10 ../parent/output.png"
+        sanitized = executor.sanitize_output_path(command)
+        assert sanitized == "magick input.jpg -border 10 output.png"
+
+
 class TestOutputFileExtraction:
     """Test output file extraction."""
 
@@ -110,6 +144,12 @@ class TestOutputFileExtraction:
         command = "magick input.jpg -resize 800x600 -quality 90 output.jpg"
         output = executor.extract_output_file(command)
         assert output == Path("output.jpg")
+
+    def test_extract_with_directory_path(self, executor):
+        """Test that directory paths are stripped during extraction."""
+        command = "magick input.jpg -resize 800x600 outputs/result.jpg"
+        output = executor.extract_output_file(command)
+        assert output == Path("result.jpg")
 
     def test_no_output_file(self, executor):
         """Test when no clear output file exists."""

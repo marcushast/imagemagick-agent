@@ -146,6 +146,35 @@ class CommandExecutor:
         else:
             self.logger.warning(f"Command validation failed: {command} - {error_message}")
 
+    def sanitize_output_path(self, command: str) -> str:
+        """Sanitize command by removing directory paths from output filenames.
+
+        Args:
+            command: The ImageMagick command
+
+        Returns:
+            Sanitized command with only filenames (no directory paths)
+        """
+        parts = command.split()
+
+        # Find the output file (last non-option argument)
+        for i in range(len(parts) - 1, 0, -1):
+            part = parts[i]
+            if not part.startswith("-") and part != parts[0] and "." in part:
+                # This is likely the output file
+                original_path = part
+                sanitized_path = Path(part).name  # Extract just the filename
+
+                if original_path != sanitized_path:
+                    # Replace the path in the command
+                    parts[i] = sanitized_path
+                    self.logger.info(
+                        f"Sanitized output path: '{original_path}' -> '{sanitized_path}'"
+                    )
+                break
+
+        return " ".join(parts)
+
     def extract_output_file(self, command: str) -> Optional[Path]:
         """Extract the output file path from a command.
 
@@ -163,7 +192,10 @@ class CommandExecutor:
             if not part.startswith("-") and not part == parts[0]:
                 # This might be the output file
                 if "." in part:  # Has an extension
-                    return Path(part)
+                    # Extract just the filename, strip any directory paths
+                    # This prevents issues with non-existent directories
+                    output_path = Path(part)
+                    return Path(output_path.name)
 
         return None
 
@@ -178,12 +210,15 @@ class CommandExecutor:
         """
         start_time = time.time()
 
+        # Sanitize output path (remove directory paths from output filenames)
+        sanitized_command = self.sanitize_output_path(command)
+
         # Validate command
-        is_valid, error_msg = self.validate_command(command)
+        is_valid, error_msg = self.validate_command(sanitized_command)
         if not is_valid:
             result = ExecutionResult(
                 success=False,
-                command=command,
+                command=sanitized_command,
                 stdout="",
                 stderr="",
                 error_message=f"Command validation failed: {error_msg}",
@@ -192,12 +227,12 @@ class CommandExecutor:
             return result
 
         # Extract output file
-        output_file = self.extract_output_file(command)
+        output_file = self.extract_output_file(sanitized_command)
 
         # Execute command
         try:
             subprocess_result = subprocess.run(
-                command,
+                sanitized_command,
                 shell=True,  # Safe because we validated the command
                 capture_output=True,
                 text=True,
@@ -209,7 +244,7 @@ class CommandExecutor:
             if subprocess_result.returncode == 0:
                 result = ExecutionResult(
                     success=True,
-                    command=command,
+                    command=sanitized_command,
                     stdout=subprocess_result.stdout,
                     stderr=subprocess_result.stderr,
                     output_file=output_file,
@@ -219,7 +254,7 @@ class CommandExecutor:
             else:
                 result = ExecutionResult(
                     success=False,
-                    command=command,
+                    command=sanitized_command,
                     stdout=subprocess_result.stdout,
                     stderr=subprocess_result.stderr,
                     error_message=f"Command failed with exit code {subprocess_result.returncode}",
@@ -231,7 +266,7 @@ class CommandExecutor:
             execution_time_ms = (time.time() - start_time) * 1000
             result = ExecutionResult(
                 success=False,
-                command=command,
+                command=sanitized_command,
                 stdout="",
                 stderr="",
                 error_message="Command timed out after 30 seconds",
@@ -243,7 +278,7 @@ class CommandExecutor:
             execution_time_ms = (time.time() - start_time) * 1000
             result = ExecutionResult(
                 success=False,
-                command=command,
+                command=sanitized_command,
                 stdout="",
                 stderr="",
                 error_message=f"Execution error: {str(e)}",

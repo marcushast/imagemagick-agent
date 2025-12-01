@@ -122,6 +122,7 @@ The `CommandExecutor` implements multiple safety layers:
 - **Command whitelist**: Only allows `magick`, `convert`, `identify`, `mogrify`, `composite`
 - **Dangerous option blocking**: Rejects `-script`, `-write`, `@` file references
 - **Shell injection prevention**: Blocks `;`, `|`, `&`, `$`, backticks
+- **Output path sanitization**: Automatically strips directory paths from output filenames to prevent errors from non-existent directories (e.g., `outputs/image.png` → `image.png`)
 - **Timeout protection**: 30-second command timeout
 - **Validation before execution**: All commands validated before subprocess call
 
