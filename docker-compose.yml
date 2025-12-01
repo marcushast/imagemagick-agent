@@ -9,7 +9,7 @@ services:
     # Ports
     ports:
       - "7860:7860"  # Gradio web interface
-      - "5000:5000"  # Log viewer (optional)
+      # - "5000:5000"  # Log viewer (uncomment if needed)
 
     # Environment variables
     environment:

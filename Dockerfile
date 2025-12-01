@@ -62,8 +62,9 @@ USER appuser
 
 # Expose ports
 # 7860: Gradio web interface
-# 5000: Log viewer
-EXPOSE 7860 5000
+# 5000: Log viewer (commented out - uncomment if running log viewer)
+EXPOSE 7860
+# EXPOSE 5000
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
